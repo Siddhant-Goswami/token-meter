@@ -126,7 +126,7 @@ for (const f of files) {
     const x = b.kind === 'img' ? X.screenshots : X.noisy_output; x.count++; x.tokens += b.tokens; x.cost += c;
   }
 }
-if (!requests) { console.error(`No Claude Code requests in the last ${DAYS} days.`); process.exit(1); }
+if (!requests) { console.error(`No Claude Code requests in the last ${DAYS} day${DAYS === 1 ? "" : "s"}.`); process.exit(1); }
 
 const r2 = v => Math.round(v * 1e4) / 1e4;
 T.cost.total = T.cost.input + T.cost.output + T.cost.cache_write + T.cost.cache_read;
@@ -142,7 +142,7 @@ const out = {
 };
 fs.writeFileSync(OUT, JSON.stringify(out, null, 2));
 const top = Object.entries(X).sort((a, b) => b[1].cost - a[1].cost)[0];
-console.log(`Read ${requests.toLocaleString()} requests from ${sessions.size} sessions (last ${DAYS} days).`);
+console.log(`Read ${requests.toLocaleString()} requests from ${sessions.size} sessions (last ${DAYS} day${DAYS === 1 ? "" : "s"}).`);
 console.log(`About $${T.cost.total.toFixed(2)} at API prices. Biggest tax: ${top[0].replace('_', ' ')}, $${top[1].cost.toFixed(2)}.`);
 if (unpricedReq) console.log(`${unpricedReq} requests on ${[...unpriced].join(', ')} aren't in prices.json, so they have no cost.`);
 console.log(`Wrote ${path.resolve(OUT)}. Drop it on the Token Meter page. It holds totals only, no prompts or code.`);

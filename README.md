@@ -1,5 +1,9 @@
 # 100x-token-meter
 
+[![npm version](https://img.shields.io/npm/v/100x-token-meter?color=FE6242&label=npm)](https://www.npmjs.com/package/100x-token-meter)
+[![node](https://img.shields.io/node/v/100x-token-meter)](https://nodejs.org)
+[![license](https://img.shields.io/npm/l/100x-token-meter)](LICENSE)
+
 See where your Claude Code tokens go. `100x-token-meter` reads Claude Code's local logs and writes one small summary file, `token-meter.json`. Drop that file on the [Token Meter page](https://100x-curriculum.vercel.app/token-meter) to see your numbers in charts, along with your biggest token tax.
 
 ```sh
@@ -8,18 +12,56 @@ npx 100x-token-meter
 
 It runs offline and only reads files. The summary holds totals and tax scores only: no prompts, code, file names or paths.
 
-## Options
+## Setup guide
+
+**1. Check you have Node.js 18 or later**
+
+```sh
+node -v
+```
+
+If that prints nothing or a version below 18, install the LTS version from [nodejs.org](https://nodejs.org).
+
+**2. Run it on the computer where you use Claude Code**
+
+```sh
+npx 100x-token-meter
+```
+
+npx downloads it the first time. You'll see something like:
+
+```
+Read 3,304 requests from 49 sessions (last 30 days).
+About $311.03 at API prices. Biggest tax: cache breaks, $25.86.
+Wrote /Users/you/token-meter.json. Drop it on the Token Meter page.
+```
+
+**3. Load the summary**
+
+Open the [Token Meter page](https://100x-curriculum.vercel.app/token-meter), go to **Your sessions**, and drop `token-meter.json` on **Claude Code**. The file is read in your browser and is never uploaded.
+
+## Flags
 
 | Flag | Default | What it does |
 | --- | --- | --- |
-| `--days N` | `30` | How far back to read |
+| `--days N` | `30` | How many days back to read |
 | `--out FILE` | `token-meter.json` | Where to write the summary |
+| `--help` | | Show usage |
 
-Logs are read from `~/.claude/projects` and `~/.config/claude/projects`, or from each folder in `CLAUDE_CONFIG_DIR` (comma-separated).
+```sh
+npx 100x-token-meter --days 7                  # just the last week
+npx 100x-token-meter --out ~/Desktop/tm.json   # write it somewhere else
+```
+
+Logs are read from `~/.claude/projects` and `~/.config/claude/projects`. If yours live elsewhere, set `CLAUDE_CONFIG_DIR` (comma-separated for more than one folder):
+
+```sh
+CLAUDE_CONFIG_DIR=/path/to/claude npx 100x-token-meter
+```
 
 ## What it measures
 
-Totals come from the `usage` field on each response, counted once per request. Costs use `prices.json`, which comes from [Anthropic's pricing page](https://platform.claude.com/docs/en/about-claude/pricing) (the date it was checked is in the file).
+Totals come from the `usage` field on each response, counted once per request. Costs use the bundled `prices.json`, taken from [Anthropic's pricing page](https://platform.claude.com/docs/en/about-claude/pricing); the date it was checked is in the file. Costs are what the same tokens would cost on the API, even if you're on a subscription.
 
 | Tax | Rule |
 | --- | --- |
@@ -29,9 +71,14 @@ Totals come from the `usage` field on each response, counted once per request. C
 | Cache breaks | A cache write over 20K tokens after a model change, or after a pause longer than the cache lifetime |
 | One model | Short Opus jobs (10 requests or fewer, none writing 300+ tokens): what they cost over Haiku |
 
-## Requirements
+## Troubleshooting
 
-Node.js 18 or later. No dependencies.
+| Message | Fix |
+| --- | --- |
+| `No Claude Code logs found` | Run it on the machine where you use Claude Code, or point `CLAUDE_CONFIG_DIR` at your Claude folder |
+| `No Claude Code requests in the last 30 days` | Read further back, for example `--days 90` |
+| `requests on … aren't in prices.json` | Those models have no price yet, so they count as requests but add no cost |
+| `npx: command not found` | Install Node.js 18 or later from [nodejs.org](https://nodejs.org) |
 
 ## License
 

@@ -1,6 +1,6 @@
 {
   "name": "100x-token-meter",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Reads your Claude Code logs offline and writes token-meter.json: totals, the cache split and a score for each token tax. No prompts or code leave your machine.",
   "type": "module",
   "bin": { "token-meter": "token-meter.mjs" },

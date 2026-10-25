@@ -9,7 +9,12 @@
      startup       the cache write on each session's first request (CLAUDE.md, tools, MCP servers)
      cache_breaks  a cache write over 20K tokens after a model change or a pause past the cache lifetime: the extra over a cache read
      one_model     short Opus jobs (a log with at most 10 requests, none writing 300 tokens or more): what they cost over Haiku.
-                   Counting every short Opus request would flag each step of an agent loop, where a switch would break the cache */
+                   Counting every short Opus request would flag each step of an agent loop, where a switch would break the cache
+   by_source splits the same total by where the tokens came from: the startup (system prompt, CLAUDE.md, tool and MCP definitions),
+   your prompts, Claude's replies, each built-in tool, each MCP server, each skill, subagents, and Claude Code's own notes.
+   Each request's real cost is shared out over what was in the context, in proportion to estimated tokens (characters ÷ 3.5):
+   cache reads over everything already stored, cache writes and input over what is new, output over the blocks Claude wrote.
+   Names only (tool, server, skill); never the text. */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -66,37 +71,106 @@ const X = { noisy_output: { count: 0, tokens: 0, cost: 0 }, screenshots: { count
 const byModel = {}, sessions = new Set(), unpriced = new Set(), seen = new Set();
 let requests = 0, unpricedReq = 0, from = null, to = null;
 
+/* ---------- attribution: which source each block of context belongs to ---------- */
+const SRC = {};
+const LABEL = { prompts: 'Your prompts', replies: "Claude's replies", notes: "Claude Code's own notes", agent: 'Subagents' };
+/* context Claude Code attaches on its own. The lists of skills, tools and MCP instructions load every session, used or not */
+const ATTACH = { skill_listing: 'skill:Skill list, loaded every session', mcp_instructions_delta: 'mcp:Server instructions, loaded every session',
+  deferred_tools_delta: 'setup:Tool list', deferred_tools_record: 'setup:Tool list', agent_listing_delta: 'setup:Subagent list' };
+const BUILTIN = new Set(['model', 'clear', 'compact', 'config', 'help', 'cost', 'context', 'memory', 'login', 'logout', 'status', 'resume', 'permissions', 'mcp', 'agents', 'hooks', 'exit', 'fast', 'usage', 'doctor', 'ide', 'theme', 'plugin', 'export', 'rewind']);
+function srcKey(name, input) {
+  if (/^mcp__/.test(name)) return 'mcp:' + name.split('__')[1];
+  if (name === 'Skill') return 'skill:' + String((input && (input.skill || input.command)) || 'unknown').replace(/^\//, '');
+  if (name === 'Task' || name === 'Agent') return 'agent';
+  return 'tool:' + name;
+}
+function charge(key, cost, tokens = 0, calls = 0) {
+  const s = SRC[key] = SRC[key] || { cost: 0, tokens: 0, calls: 0 };
+  s.cost += cost; s.tokens += tokens; s.calls += calls;
+}
+const textOf = c => typeof c === 'string' ? c : Array.isArray(c) ? c.map(x => x && x.type === 'text' ? x.text || '' : '').join('') : '';
+
 for (const f of files) {
   if (fs.statSync(f).mtimeMs < since) continue;
   const reqs = [], blocks = []; /* blocks: {tokens, kind, at: number of requests before it} */
+  const events = [], byId = new Map(), toolKey = new Map(); /* events: items added to the context and requests, in log order */
+  let side = f.includes(path.sep + 'subagents' + path.sep), lastCmd = null;
   for (const line of fs.readFileSync(f, 'utf8').split('\n')) {
     if (!line) continue;
     let d; try { d = JSON.parse(line); } catch (e) { continue; }
+    if (d.isSidechain) side = true;
     const t = d.timestamp ? Date.parse(d.timestamp) : NaN;
     if (!(t >= since)) continue;
     const m = d.message;
     if (d.type === 'assistant' && m && m.usage) {
-      const id = d.requestId || m.id; if (!id || seen.has(id)) continue; seen.add(id);
-      if (m.model === '<synthetic>') continue;
-      reqs.push({ t, model: m.model || 'unknown', u: m.usage });
-      if (d.sessionId) sessions.add(d.sessionId);
-      from = from == null || t < from ? t : from; to = to == null || t > to ? t : to;
-    } else if (d.type === 'user' && m && Array.isArray(m.content)) {
-      for (const b of m.content) {
-        if (b.type === 'image' && b.source && b.source.data) blocks.push({ kind: 'img', tokens: imageTokens(b.source.data), at: reqs.length });
-        if (b.type === 'tool_result') {
+      const id = d.requestId || m.id;
+      if (!id || m.model === '<synthetic>') continue;
+      let r = byId.get(id);
+      if (!r) {
+        if (seen.has(id)) continue; seen.add(id); /* the same request logged in another file */
+        r = { t, model: m.model || 'unknown', u: m.usage, out: [] }; byId.set(id, r); reqs.push(r); events.push({ req: r });
+        if (d.sessionId) sessions.add(d.sessionId);
+        from = from == null || t < from ? t : from; to = to == null || t > to ? t : to;
+      } else if ((m.usage.output_tokens || 0) >= (r.u.output_tokens || 0)) r.u = m.usage; /* one response, several lines: keep the fullest usage */
+      for (const b of Array.isArray(m.content) ? m.content : []) {
+        if (b.type === 'tool_use') { const k = srcKey(b.name, b.input); toolKey.set(b.id, k); r.out.push({ key: k, tokens: est(JSON.stringify(b.input || {})), call: 1 }); }
+        else if (b.type === 'text' || b.type === 'thinking') r.out.push({ key: 'replies', tokens: est(b.text || b.thinking || '') });
+      }
+    } else if (d.type === 'user' && m) {
+      const content = Array.isArray(m.content) ? m.content : [{ type: 'text', text: typeof m.content === 'string' ? m.content : '' }];
+      for (const b of content) {
+        if (b.type === 'image' && b.source && b.source.data) {
+          const tk = imageTokens(b.source.data); blocks.push({ kind: 'img', tokens: tk, at: reqs.length }); events.push({ key: d.isMeta ? 'notes' : 'prompts', tokens: tk });
+        } else if (b.type === 'tool_result') {
+          const key = toolKey.get(b.tool_use_id) || 'notes';
           const inner = Array.isArray(b.content) ? b.content : [{ type: 'text', text: typeof b.content === 'string' ? b.content : '' }];
           let text = 0;
           for (const x of inner) {
-            if (x.type === 'image' && x.source && x.source.data) blocks.push({ kind: 'img', tokens: imageTokens(x.source.data), at: reqs.length });
+            if (x.type === 'image' && x.source && x.source.data) { const tk = imageTokens(x.source.data); blocks.push({ kind: 'img', tokens: tk, at: reqs.length }); events.push({ key, tokens: tk }); }
             else if (x.type === 'text' && x.text) text += est(x.text);
           }
           if (text > NOISY) blocks.push({ kind: 'noisy', tokens: text, at: reqs.length });
+          events.push({ key, tokens: text });
+        } else if (b.type === 'text' && b.text) {
+          /* a skill's instructions arrive as a meta message after the Skill call, or after you type its slash command */
+          const cmd = /<command-name>\/?([^<\s]+)<\/command-name>/.exec(b.text);
+          let key = 'prompts';
+          if (d.isMeta) key = d.sourceToolUseID && toolKey.get(d.sourceToolUseID) ? toolKey.get(d.sourceToolUseID) : lastCmd && !BUILTIN.has(lastCmd) ? 'skill:' + lastCmd : 'notes';
+          else if (/^<(local-command|system-reminder|bash-|task-notification)/.test(b.text.trim())) key = 'notes';
+          events.push({ key, tokens: est(b.text) });
+          lastCmd = cmd ? cmd[1] : d.isMeta ? null : lastCmd;
         }
       }
+    } else if (d.type === 'attachment' && d.attachment && d.attachment.type !== 'prompt_snapshot') {
+      events.push({ key: ATTACH[d.attachment.type] || 'notes', tokens: est(JSON.stringify(d.attachment)) });
     }
   }
   if (!reqs.length) continue;
+
+  /* share each request's real cost over the context it carried. A subagent's whole log counts as Subagents */
+  let stored = [], fresh = [], setupDone = false;
+  const spread = (list, cost) => { const n = list.reduce((a, x) => a + x.tokens, 0); if (!n) return false; list.forEach(x => charge(side ? 'agent' : x.key, cost * x.tokens / n)); return true; };
+  for (const e of events) {
+    if (!e.req) { if (e.tokens > 0) fresh.push(e); continue; }
+    const r = e.req, c = cost(r.u, r.model);
+    if (!c) continue;
+    const u = r.u, cw = (u.cache_creation_input_tokens || 0), newT = cw + (u.input_tokens || 0), freshT = fresh.reduce((a, x) => a + x.tokens, 0);
+    if (!setupDone) { stored.push({ key: 'setup:System prompt, CLAUDE.md and tool definitions', tokens: Math.max(1000, newT + (u.cache_read_input_tokens || 0) - freshT) }); setupDone = true; }
+    else if (!(u.cache_read_input_tokens) && newT < 0.6 * (stored.reduce((a, x) => a + x.tokens, 0) + freshT)) stored = stored.filter(x => x.key.startsWith('setup')); /* compacted or cleared */
+    const newCost = c.input + c.cache_write;
+    /* new tokens beyond what's fresh are history written again (a cache break): that part goes to what was stored */
+    if (newT > freshT && stored.length) { const old = newCost * (newT - freshT) / newT; spread(stored, old); if (!spread(fresh, newCost - old)) spread(stored, newCost - old); }
+    else if (!spread(fresh, newCost)) spread(stored, newCost);
+    if (!spread(stored, c.cache_read)) spread(fresh, c.cache_read);
+    const outList = r.out.length ? r.out : [{ key: 'replies', tokens: 1 }];
+    spread(outList.map(x => ({ key: x.key, tokens: Math.max(1, x.tokens) })), c.output);
+    outList.forEach(x => { if (x.call && !side) charge(x.key, 0, 0, 1); });
+    stored.push(...fresh); fresh = [];
+    const outT = outList.reduce((a, x) => a + Math.max(1, x.tokens), 0);
+    outList.forEach(x => fresh.push({ key: x.key, tokens: (u.output_tokens || 0) * Math.max(1, x.tokens) / outT }));
+  }
+  events.forEach(e => { if (!e.req && e.tokens > 0) charge(side ? 'agent' : e.key, 0, e.tokens); });
+
   const ttl = reqs.some(r => r.u.cache_creation && r.u.cache_creation.ephemeral_1h_input_tokens) ? PR.cache_lifetime_minutes.paid_plan : PR.cache_lifetime_minutes.api;
   reqs.forEach((r, i) => {
     requests++;
@@ -134,10 +208,14 @@ Object.keys(T.cost).forEach(k => { T.cost[k] = r2(T.cost[k]); });
 Object.values(X).forEach(x => { x.cost = r2(x.cost); });
 X.startup.avg_first_write = X.startup.sessions ? Math.round(X.startup.tokens / X.startup.sessions) : 0;
 Object.values(byModel).forEach(v => { if (v.cost != null) v.cost = r2(v.cost); });
+const bySource = Object.entries(SRC).filter(([, v]) => v.cost > 0).sort((a, b) => b[1].cost - a[1].cost).map(([k, v]) => {
+  const [kind, name] = k.includes(':') ? k.split(/:(.*)/) : [k, LABEL[k]];
+  return { kind, name, cost: r2(v.cost), tokens: Math.round(v.tokens), calls: v.calls };
+});
 const out = {
-  tool: 'token-meter', version: 1, source: 'claude-code', generated: new Date().toISOString(), prices_checked: PR.checked,
+  tool: 'token-meter', version: 2, source: 'claude-code', generated: new Date().toISOString(), prices_checked: PR.checked,
   period: { days: DAYS, from: new Date(from).toISOString(), to: new Date(to).toISOString() },
-  sessions: sessions.size, requests, totals: T, by_model: byModel, taxes: X,
+  sessions: sessions.size, requests, totals: T, by_model: byModel, by_source: bySource, taxes: X,
   unpriced: { requests: unpricedReq, models: [...unpriced] }
 };
 fs.writeFileSync(OUT, JSON.stringify(out, null, 2));

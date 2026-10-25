@@ -10,7 +10,7 @@ See where your Claude Code tokens go. `100x-token-meter` reads Claude Code's loc
 npx 100x-token-meter
 ```
 
-It runs offline and only reads files. The summary holds totals and tax scores only: no prompts, code, file names or paths.
+It runs offline and only reads files. The summary holds totals, tax scores and a cost split by source only: tool, MCP server and skill names, never prompts, code, file names or paths.
 
 ## Setup guide
 
@@ -70,6 +70,12 @@ Totals come from the `usage` field on each response, counted once per request. C
 | Startup | The cache write on each session's first request: CLAUDE.md, tools, MCP servers |
 | Cache breaks | A cache write over 20K tokens after a model change, or after a pause longer than the cache lifetime |
 | One model | Short Opus jobs (10 requests or fewer, none writing 300+ tokens): what they cost over Haiku |
+
+### Where it went, by source
+
+`by_source` splits the same total by what was in Claude's context: the startup (system prompt, CLAUDE.md, tool list), your prompts, Claude's replies, each built-in tool, each MCP server, each skill, subagents, and Claude Code's own notes. The skill list and MCP server instructions, which load every session, get their own lines.
+
+Each request's real cost is shared out over its context in proportion to estimated size (characters ÷ 3.5): cache reads over everything already stored, cache writes and input over what is new, output over the blocks Claude wrote. A subagent's whole log counts as Subagents. The split is an estimate; its total matches the real one.
 
 ## Troubleshooting
 

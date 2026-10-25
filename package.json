@@ -1,0 +1,14 @@
+{
+  "name": "token-meter",
+  "version": "0.1.0",
+  "description": "Reads your Claude Code logs offline and writes token-meter.json: totals, the cache split and a score for each token tax. No prompts or code leave your machine.",
+  "type": "module",
+  "bin": { "token-meter": "token-meter.mjs" },
+  "files": ["token-meter.mjs", "prices.json"],
+  "engines": { "node": ">=18" },
+  "keywords": ["claude", "claude-code", "tokens", "cost", "prompt-caching", "anthropic"],
+  "homepage": "https://100x-curriculum.vercel.app/token-meter",
+  "repository": { "type": "git", "url": "git+https://github.com/Siddhant-Goswami/token-meter.git" },
+  "bugs": { "url": "https://github.com/Siddhant-Goswami/token-meter/issues" },
+  "license": "MIT"
+}

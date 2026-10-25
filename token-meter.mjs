@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /* token-meter: reads Claude Code's local logs (every .jsonl under ~/.claude/projects) and writes token-meter.json.
    Offline, read-only, no dependencies. The output holds totals and tax scores only: no prompts, code, file names or paths.
-   Usage: npx token-meter-cli [--days 30] [--out token-meter.json]
+   Usage: npx 100x-token-meter [--days 30] [--out token-meter.json]
    Totals come from each response's usage field, deduplicated by request id (one response is logged as several lines).
    Tax scores, as in the Token Meter spec:
      noisy_output  tool results over 5,000 tokens (characters ÷ 3.5), priced as written once and re-read on every later request
@@ -16,7 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const args = process.argv.slice(2), opt = (k, d) => { const i = args.indexOf(k); return i >= 0 && args[i + 1] ? args[i + 1] : d; };
-if (args.includes('--help') || args.includes('-h')) { console.log('Usage: npx token-meter-cli [--days 30] [--out token-meter.json]'); process.exit(0); }
+if (args.includes('--help') || args.includes('-h')) { console.log('Usage: npx 100x-token-meter [--days 30] [--out token-meter.json]'); process.exit(0); }
 const DAYS = +opt('--days', 30), OUT = opt('--out', 'token-meter.json');
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PR = JSON.parse(fs.readFileSync(path.join(here, 'prices.json'), 'utf8'));

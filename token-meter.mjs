@@ -3,11 +3,10 @@
    Claude Code   every .jsonl under ~/.claude/projects (or CLAUDE_CONFIG_DIR)
    Codex CLI     every .jsonl under ~/.codex/sessions and ~/.codex/archived_sessions (or CODEX_HOME)
    Gemini CLI    every session file under ~/.gemini/tmp/<project>/chats (or GEMINI_CLI_HOME)
-   OpenCode      ~/.local/share/opencode/opencode.db, or the older storage/message folders (or XDG_DATA_HOME)
    Hermes Agent  ~/.hermes/state.db (or HERMES_HOME). It keeps totals per session and model only, so it has no taxes or by_source
-   OpenCode and Hermes keep SQLite files, read with node:sqlite (Node 22.13 or later); on older Node they're skipped with a note.
+   Hermes keeps a SQLite file, read with node:sqlite (Node 22.13 or later); on older Node it's skipped with a note.
    Open models (OpenRouter, Ollama) are priced from prices.json's "open" entry; one run on your own machine is priced as the same model hosted.
-   Usage: npx 100x-token-meter [--days 30] [--tool all|claude|codex|gemini|opencode|hermes] [--out token-meter.json]
+   Usage: npx 100x-token-meter [--days 30] [--tool all|claude|codex|gemini|hermes] [--out token-meter.json]
    The output holds totals and tax scores only: no prompts, code, file names or paths.
    Totals come from each response's own usage numbers, deduplicated by request or response id. Each reader turns its log into
    the same shape (requests with usage, and the blocks added to the context between them) so one engine prices them all:
@@ -31,10 +30,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const args = process.argv.slice(2), opt = (k, d) => { const i = args.indexOf(k); return i >= 0 && args[i + 1] ? args[i + 1] : d; };
-const USAGE = 'Usage: npx 100x-token-meter [--days 30] [--tool all|claude|codex|gemini|opencode|hermes] [--out token-meter.json]';
+const USAGE = 'Usage: npx 100x-token-meter [--days 30] [--tool all|claude|codex|gemini|hermes] [--out token-meter.json]';
 if (args.includes('--help') || args.includes('-h')) { console.log(USAGE); process.exit(0); }
 const DAYS = +opt('--days', 30), OUT = opt('--out', 'token-meter.json'), ONLY = opt('--tool', 'all');
-if (!['all', 'claude', 'codex', 'gemini', 'opencode', 'hermes'].includes(ONLY)) { console.error(USAGE); process.exit(1); }
+if (!['all', 'claude', 'codex', 'gemini', 'hermes'].includes(ONLY)) { console.error(USAGE); process.exit(1); }
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PR = JSON.parse(fs.readFileSync(path.join(here, 'prices.json'), 'utf8'));
 const NOISY = 5000, BREAK = 20000, SHORT = 300;
@@ -135,14 +134,6 @@ const TOOLS = {
     flag: 'gemini', label: 'Gemini CLI', provider: 'google', setup: 'System prompt, GEMINI.md and tool definitions',
     files: () => walk(path.join(process.env.GEMINI_CLI_HOME || home, '.gemini', 'tmp'), p => /[\\/]chats[\\/][^\\/]+\.jsonl?$/.test(p), []),
     read: readGemini
-  },
-  opencode: {
-    flag: 'opencode', label: 'OpenCode', provider: null, setup: 'System prompt, AGENTS.md and tool definitions', sqlite: true,
-    files: () => {
-      const d = path.join(process.env.XDG_DATA_HOME || path.join(home, '.local', 'share'), 'opencode'), db = path.join(d, 'opencode.db'), msg = path.join(d, 'storage', 'message');
-      return [...(fs.existsSync(db) ? [db] : []), ...(fs.existsSync(msg) ? fs.readdirSync(msg).map(x => path.join(msg, x)) : [])];
-    },
-    read: readOpencode
   },
   hermes: {
     flag: 'hermes', label: 'Hermes Agent', provider: null, setup: 'System prompt, SOUL.md and tool definitions', sqlite: true,
@@ -343,57 +334,6 @@ function readGemini(f) {
   return [s];
 }
 
-/* OpenCode: each assistant message carries its own tokens (input is the uncached part; reasoning is billed as output but counted
-   apart). Newer versions keep them in opencode.db (session_message.data), older ones one JSON file per message under
-   storage/message/<session>. A session with no per-message counts falls back to session_v2's totals. The text isn't read for by_source */
-function ocUsage(d) {
-  const k = d && (d.tokens || d.usage);
-  if (!k || typeof k !== 'object') return null;
-  const c = k.cache || {}, n = v => +v || 0;
-  const u = { input: n(k.input ?? k.input_tokens ?? k.inputTokens), read: n(c.read ?? k.cache_read ?? k.cacheRead), write: n(c.write ?? k.cache_write ?? k.cacheWrite), write_long: 0,
-    output: n(k.output ?? k.output_tokens ?? k.outputTokens) + n(k.reasoning ?? k.reasoning_tokens ?? k.reasoningTokens) };
-  return u.input + u.read + u.write + u.output ? u : null;
-}
-function ocRequest(s, id, d, t) {
-  const u = ocUsage(d);
-  if (!u || !(t >= since) || seen.has('oc' + id)) return;
-  seen.add('oc' + id);
-  const m = d.model && typeof d.model === 'object' ? d.model : { id: d.modelID || d.model, providerID: d.providerID };
-  addReq(s, { t, model: m.id || 'unknown', u, out: [], local: isLocal(m.providerID) });
-}
-function readOpencode(f) {
-  if (fs.statSync(f).isDirectory()) {
-    const s = session(); s.id = path.basename(f); s.split = false;
-    for (const x of fs.readdirSync(f).filter(x => x.endsWith('.json')).sort()) {
-      let d; try { d = JSON.parse(fs.readFileSync(path.join(f, x), 'utf8')); } catch (e) { continue; }
-      if (d.role === 'assistant') ocRequest(s, d.id || x, d, d.time && d.time.created);
-    }
-    s.reqs.sort((a, b) => a.t - b.t); s.events = s.reqs.map(req => ({ req }));
-    return [s];
-  }
-  const db = openDb(f), byS = new Map();
-  try {
-    for (const r of db.prepare("SELECT id, session_id, time_created, data FROM session_message WHERE type = 'assistant' ORDER BY session_id, seq").all()) {
-      let d; try { d = JSON.parse(r.data); } catch (e) { continue; }
-      if (!byS.has(r.session_id)) { const s = session(); s.id = r.session_id; s.split = false; byS.set(r.session_id, s); }
-      ocRequest(byS.get(r.session_id), r.id, d, (d.time && d.time.created) || r.time_created);
-    }
-    for (const r of db.prepare('SELECT id, parent_id, model, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, time_updated FROM session_v2').all()) {
-      const s = byS.get(r.id) || session();
-      s.id = r.id; s.side = !!r.parent_id;
-      if (s.reqs.length || !(r.time_updated >= since) || seen.has('ocs' + r.id)) { byS.set(r.id, s); continue; }
-      const u = { input: r.tokens_input, read: r.tokens_cache_read, write: r.tokens_cache_write, write_long: 0, output: r.tokens_output + r.tokens_reasoning };
-      if (!(u.input + u.read + u.write + u.output)) continue;
-      seen.add('ocs' + r.id);
-      let m = {}; try { m = JSON.parse(r.model) || {}; } catch (e) { m = { id: r.model }; }
-      const n = db.prepare("SELECT count(*) AS n FROM session_message WHERE session_id = ? AND type = 'assistant'").get(r.id).n || 1;
-      Object.assign(s, { split: false, coarse: true }); addReq(s, { t: r.time_updated, model: m.id || 'unknown', u, out: [], n, local: isLocal(m.providerID) });
-      byS.set(r.id, s);
-    }
-  } finally { db.close(); }
-  return [...byS.values()];
-}
-
 /* Hermes Agent: state.db keeps one row per session, model and billing route, with the call count and token sums (input without
    cache reads; reasoning inside output). No per-request detail, so these sessions count toward totals and by_model only */
 function readHermes(f) {
@@ -502,7 +442,7 @@ function account(s, tool) {
 
 const present = [], skipped = [];
 /* a SQLite file can change only in its -wal file */
-const fresh = f => recent(f) || recent(f + '-wal') || (fs.existsSync(f) && fs.statSync(f).isDirectory() && recent(f));
+const fresh = f => recent(f) || recent(f + '-wal');
 for (const [tool, def] of Object.entries(TOOLS)) {
   if (ONLY !== 'all' && ONLY !== def.flag) continue;
   const files = def.files().filter(fresh);
@@ -515,8 +455,8 @@ if (skipped.length) console.error(`Skipped ${skipped.join(' and ')}: reading ${s
 const names = (ONLY === 'all' ? Object.values(TOOLS) : Object.values(TOOLS).filter(d => d.flag === ONLY)).map(d => d.label).join(', ');
 if (!requests) {
   console.error(`No ${names} requests in the last ${DAYS} day${DAYS === 1 ? '' : 's'}.`);
-  console.error('Logs are read from ~/.claude/projects, ~/.codex/sessions, ~/.gemini/tmp, ~/.local/share/opencode and ~/.hermes.');
-  console.error('Set CLAUDE_CONFIG_DIR, CODEX_HOME, GEMINI_CLI_HOME, XDG_DATA_HOME or HERMES_HOME if yours live elsewhere.');
+  console.error('Logs are read from ~/.claude/projects, ~/.codex/sessions, ~/.gemini/tmp and ~/.hermes.');
+  console.error('Set CLAUDE_CONFIG_DIR, CODEX_HOME, GEMINI_CLI_HOME or HERMES_HOME if yours live elsewhere.');
   process.exit(1);
 }
 
@@ -529,7 +469,7 @@ Object.values(byModel).forEach(v => { if (v.cost != null) v.cost = r2(v.cost); }
 const tools = Object.keys(byTool);
 Object.values(byTool).forEach(v => { v.cost = r2(v.cost); v.sessions = v.ids.size; v.measured = [...v.measured]; delete v.ids; });
 local.cost = r2(local.cost);
-/* taxes need per-request logs: with only session totals (Hermes, older OpenCode) each one is null */
+/* taxes need per-request logs: with only session totals (Hermes) each one is null */
 const taxes = taxed ? X : Object.fromEntries(Object.keys(X).map(k => [k, null]));
 const bySource = Object.entries(SRC).filter(([, v]) => v.cost > 0).sort((a, b) => b[1].cost - a[1].cost).map(([k, v]) => {
   const [kind, name] = k.includes(':') ? k.split(/:(.*)/) : [k, LABEL[k]];

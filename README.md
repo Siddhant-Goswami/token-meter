@@ -4,7 +4,7 @@
 [![node](https://img.shields.io/node/v/100x-token-meter)](https://nodejs.org)
 [![license](https://img.shields.io/npm/l/100x-token-meter)](LICENSE)
 
-See where your coding agent's tokens go. `100x-token-meter` reads the local logs of **Claude Code**, **Codex CLI**, **Gemini CLI**, **OpenCode** and **Hermes Agent**, including open models on OpenRouter or Ollama, and writes one small summary file, `token-meter.json`. Drop that file on the [Token Meter page](https://100x-curriculum.vercel.app/token-meter) to see your numbers in charts, along with your biggest token tax.
+See where your coding agent's tokens go. `100x-token-meter` reads the local logs of **Claude Code**, **Codex CLI**, **Gemini CLI** and **Hermes Agent**, including open models on OpenRouter or Ollama, and writes one small summary file, `token-meter.json`. Drop that file on the [Token Meter page](https://100x-curriculum.vercel.app/token-meter) to see your numbers in charts, along with your biggest token tax.
 
 ```sh
 npx 100x-token-meter
@@ -46,7 +46,7 @@ Open the [Token Meter page](https://100x-curriculum.vercel.app/token-meter), go 
 
 | Flag | Default | What it does |
 | --- | --- | --- |
-| `--tool NAME` | `all` | `claude`, `codex`, `gemini`, `opencode` or `hermes` to read one tool only |
+| `--tool NAME` | `all` | `claude`, `codex`, `gemini` or `hermes` to read one tool only |
 | `--days N` | `30` | How many days back to read |
 | `--out FILE` | `token-meter.json` | Where to write the summary |
 | `--help` | | Show usage |
@@ -64,10 +64,9 @@ Where the logs are read from, and how to point somewhere else:
 | Claude Code | `~/.claude/projects`, `~/.config/claude/projects` | `CLAUDE_CONFIG_DIR` (comma-separated for more than one) |
 | Codex CLI | `~/.codex/sessions`, `~/.codex/archived_sessions` | `CODEX_HOME` |
 | Gemini CLI | `~/.gemini/tmp/<project>/chats` | `GEMINI_CLI_HOME` |
-| OpenCode | `~/.local/share/opencode/opencode.db`, or `storage/message` in older versions | `XDG_DATA_HOME` |
 | Hermes Agent | `~/.hermes/state.db` | `HERMES_HOME` |
 
-OpenCode and Hermes keep SQLite databases, which need Node 22.13 or later to read. On older Node the other tools still run and these two are skipped with a note. Hermes stores totals per session and model, not each request, so its sessions add to the totals and the model table but have no tax scores or split by source; `by_tool` lists what each tool could measure.
+Hermes keeps a SQLite database, which needs Node 22.13 or later to read. On older Node the other tools still run and Hermes is skipped with a note. Hermes stores totals per session and model, not each request, so its sessions add to the totals and the model table but have no tax scores or split by source; `by_tool` lists what each tool could measure.
 
 ## What it measures
 
@@ -95,7 +94,7 @@ Each request's real cost is shared out over its context in proportion to estimat
 | --- | --- |
 | `No … requests in the last 30 days` | Read further back with `--days 90`, run it on the machine where you use the tool, or set the folder override above |
 | `requests on … aren't in prices.json` | Those models have no price yet, so they count as requests but add no cost |
-| `Skipped OpenCode / Hermes Agent` | Their logs are SQLite; update to Node 22.13 or later |
+| `Skipped Hermes Agent` | Its log is SQLite; update to Node 22.13 or later |
 | `npx: command not found` | Install Node.js 18 or later from [nodejs.org](https://nodejs.org) |
 
 ## License

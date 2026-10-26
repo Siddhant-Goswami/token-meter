@@ -72,6 +72,8 @@ Hermes keeps a SQLite database, which needs Node 22.13 or later to read. On olde
 
 Totals come from each response's own usage numbers, counted once per request. Costs use the bundled `prices.json`, taken from [Anthropic's](https://platform.claude.com/docs/en/about-claude/pricing), [OpenAI's](https://developers.openai.com/api/docs/pricing) and [Google's](https://ai.google.dev/gemini-api/docs/pricing) pricing pages; the date they were checked is in the file. Costs are what the same tokens would cost on the API, even if you're on a subscription.
 
+Codex CLI's logs don't say which new tokens were written to the cache, so they're priced as plain input. OpenAI bills 30-minute cache writes at 1.25× input on GPT-5.6 and later, so a Codex total can be up to a quarter of its input cost low. The page shows that amount.
+
 Open models are priced at [OpenRouter's](https://openrouter.ai/models) rates. A model you run on your own machine (Ollama, LM Studio) bills nothing, so it is priced as the same model hosted on OpenRouter, marked `local` in `by_model`, and summed in `local`. Ollama tags are matched only where the family and size match (`llama3.2:3b` is Llama 3.2 3B); others, such as `qwen3:8b`, which OpenRouter doesn't host, show as not priced.
 
 | Tax | Rule |
